@@ -1,0 +1,23 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "abot-sms",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-03",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 1
+    }
+  },
+  // Names only. Values are set with `wrangler secret put` or .dev.vars, never committed.
+  // AIR_BROKER_DEVICE_ID and AIR_BROKER_DEVICE_TOKEN are optional (device-token WebSocket).
+  "secrets": {
+    "required": ["AIR_BROKER_URL", "AIR_BROKER_ACCESS_CODE"]
+  }
+}
