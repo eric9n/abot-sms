@@ -315,6 +315,24 @@ describe("air-broker client", () => {
   });
 });
 
+function mcpRequest(
+  method: string,
+  params?: unknown,
+  id: number | string | null = 1,
+): Request {
+  const body: Record<string, unknown> = { jsonrpc: "2.0", method };
+  if (id !== null) body.id = id;
+  if (params !== undefined) body.params = params;
+  return new Request(`${BASE}/mcp`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+    },
+    body: JSON.stringify(body),
+  });
+}
+
 describe("abot-sms handler", () => {
   it("answers health without calling air-broker", async () => {
     const fetchImpl = vi.fn<typeof fetch>();
@@ -326,29 +344,129 @@ describe("abot-sms handler", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it("does not expose the old REST routes", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    const paths = [
+      new Request(`${BASE}/devices`),
+      new Request(`${BASE}/contacts?device=185`),
+      new Request(`${BASE}/contacts/185`),
+      new Request(`${BASE}/sms`, {
+        method: "POST",
+        body: JSON.stringify({ deviceId: "185", to: "555", content: "hi" }),
+      }),
+    ];
+    for (const request of paths) {
+      const response = await handleRequest(request, env(), { fetch: fetchImpl });
+      expect(response.status).toBe(404);
+      expect(await response.json()).toEqual({ ok: false, error: "not found" });
+    }
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("initializes with serverInfo and the client's protocol version", async () => {
+    const response = await handleRequest(
+      mcpRequest("initialize", {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "abot-gateway", version: "1.0.0" },
+      }),
+      env(),
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        protocolVersion: "2025-06-18",
+        capabilities: { tools: { listChanged: false } },
+        serverInfo: { name: "abot-sms", version: "1.0.0" },
+        instructions: expect.any(String),
+      },
+    });
+  });
+
+  it("lists tools whose names and schemas can take an sms_ prefix", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    const response = await handleRequest(mcpRequest("tools/list"), env(), {
+      fetch: fetchImpl,
+    });
+    const body = (await response.json()) as {
+      result: {
+        tools: Array<{
+          name: string;
+          inputSchema: { type: string; properties?: Record<string, unknown>; required?: string[] };
+        }>;
+      };
+    };
+    const tools = body.result.tools;
+    expect(tools.map((tool) => tool.name)).toEqual([
+      "list_devices",
+      "list_contacts",
+      "send_sms",
+    ]);
+    for (const tool of tools) {
+      expect(tool.name.startsWith("sms_")).toBe(false);
+      expect(`sms_${tool.name}`).toMatch(/^[a-z0-9_]{1,64}$/);
+      expect(tool.inputSchema.type).toBe("object");
+    }
+    expect(tools[1]?.inputSchema.required).toEqual(["deviceId"]);
+    expect(tools[2]?.inputSchema.required).toEqual(["deviceId", "to", "content"]);
+    expect(Object.keys(tools[2]?.inputSchema.properties ?? {}).sort()).toEqual([
+      "content",
+      "deviceId",
+      "to",
+    ]);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("accepts the initialized notification", async () => {
+    const response = await handleRequest(
+      mcpRequest("notifications/initialized", {}, null),
+      env(),
+    );
+    expect(response.status).toBe(202);
+    expect(await response.text()).toBe("");
+  });
+
   it("lists contacts for a device through the client", async () => {
     const { fetchImpl } = installFetch((_input, init) => {
       if (init?.method === "POST") return jsonResponse({ ok: true }, 200, sessionHeaders());
       return jsonResponse([{ number: "555", name: "Ada", last_seen: 3 }]);
     });
-    const response = await handleRequest(new Request(`${BASE}/contacts/185`), env(), {
-      fetch: fetchImpl,
-    });
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual([{ number: "555", name: "Ada", last_seen: 3 }]);
-  });
-
-  it("rejects an SMS body that does not name a device, number, and content", async () => {
-    const fetchImpl = vi.fn<typeof fetch>();
     const response = await handleRequest(
-      new Request(`${BASE}/sms`, {
-        method: "POST",
-        body: JSON.stringify({ deviceId: "185", to: "", content: "hi" }),
+      mcpRequest("tools/call", {
+        name: "list_contacts",
+        arguments: { deviceId: "185" },
       }),
       env(),
       { fetch: fetchImpl },
     );
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      result: { structuredContent: { contacts: unknown }; isError?: boolean };
+    };
+    expect(body.result.isError).toBeUndefined();
+    expect(body.result.structuredContent).toEqual({
+      contacts: [{ number: "555", name: "Ada", last_seen: 3 }],
+    });
+  });
+
+  it("rejects an SMS call that does not name a device, number, and content", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    const response = await handleRequest(
+      mcpRequest("tools/call", {
+        name: "send_sms",
+        arguments: { deviceId: "185", to: "", content: "hi" },
+      }),
+      env(),
+      { fetch: fetchImpl },
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      jsonrpc: "2.0",
+      id: 1,
+      error: { code: -32602, message: "deviceId, to, and content are required" },
+    });
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
@@ -365,9 +483,9 @@ describe("abot-sms handler", () => {
     };
     const { calls, fetchImpl } = installFetch(() => jsonResponse({ ok: true }, 200, sessionHeaders()));
     const response = await handleRequest(
-      new Request(`${BASE}/sms`, {
-        method: "POST",
-        body: JSON.stringify({ deviceId: "185", to: "555", content: "hello" }),
+      mcpRequest("tools/call", {
+        name: "send_sms",
+        arguments: { deviceId: "185", to: "555", content: "hello" },
       }),
       env(),
       {
@@ -376,10 +494,49 @@ describe("abot-sms handler", () => {
       },
     );
     expect(response.status).toBe(200);
-    const body = (await response.json()) as { ok: boolean; req_id: string };
-    expect(body.ok).toBe(true);
-    expect(body.req_id).toBeTypeOf("string");
+    const body = (await response.json()) as {
+      result: {
+        isError?: boolean;
+        structuredContent: { ok: boolean; req_id: string; receipt: { status: string } };
+        content: Array<{ type: string; text: string }>;
+      };
+    };
+    expect(body.result.isError).toBeUndefined();
+    expect(body.result.structuredContent.ok).toBe(true);
+    expect(body.result.structuredContent.req_id).toBeTypeOf("string");
+    expect(body.result.structuredContent.receipt.status).toBe("success");
+    expect(body.result.content[0]?.text).toBe(JSON.stringify(body.result.structuredContent));
     expect(calls.map((call) => new URL(call.url).pathname)).toEqual(["/auth"]);
     expect(socket.sent.some((line) => line.includes("https://"))).toBe(false);
+  });
+
+  it("returns a fail receipt as a successful tool result", async () => {
+    const socket = new FakeSocket();
+    socket.onPublish = () => {
+      socket.emitMessage(
+        JSON.stringify({
+          action: "publish",
+          topic: "air780e/response/185",
+          payload: { status: "fail", message: "limit" },
+        }),
+      );
+    };
+    const response = await handleRequest(
+      mcpRequest("tools/call", {
+        name: "send_sms",
+        arguments: { deviceId: "185", to: "555", content: "hello" },
+      }),
+      env(),
+      {
+        fetch: installFetch(() => jsonResponse({ ok: true }, 200, sessionHeaders())).fetchImpl,
+        connectWebSocket: async () => socket,
+      },
+    );
+    const body = (await response.json()) as {
+      result: { isError?: boolean; structuredContent: { ok: boolean; receipt: { status: string } } };
+    };
+    expect(body.result.isError).toBeUndefined();
+    expect(body.result.structuredContent.ok).toBe(false);
+    expect(body.result.structuredContent.receipt.status).toBe("fail");
   });
 });

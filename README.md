@@ -1,24 +1,40 @@
 # abot-sms
 
-Internal Cloudflare Worker that sends SMS by calling the **existing live air-broker worker**. It does not change that worker, and it does not add routes to it. abot.run will sit in front of this service later.
+Internal Cloudflare Worker that sends SMS by calling the **existing live air-broker worker**. It does not change that worker, and it does not add routes to it. Callers use MCP. abot.run sits in front and prefixes these tools as `sms_<tool>`.
+
+## Caller API
+
+`GET /health` (and `GET /`) returns `{ "ok": true, "service": "abot-sms" }`.
+
+`POST /mcp` speaks MCP JSON-RPC 2.0. It handles `initialize`, `ping`, `tools/list`, and `tools/call`. A notification such as `notifications/initialized` gets HTTP 202 and an empty body. Responses are JSON, not a server-sent event stream.
+
+| Tool | Arguments | Result |
+| --- | --- | --- |
+| `list_devices` | none | `{ "devices": [ ... ] }` |
+| `list_contacts` | `deviceId` | `{ "contacts": [ ... ] }` |
+| `send_sms` | `deviceId`, `to`, `content` | `{ "ok", "req_id", "receipt" }` |
+
+Tool names are unprefixed. A gateway that mounts this worker advertises `sms_list_devices`, `sms_list_contacts`, and `sms_send_sms`, and forwards `tools/call` with the original name and the same arguments. Each `inputSchema` is an object schema with those argument names, so the prefix does not have to rewrite the schema.
+
+`tools/call` returns the payload as text content and as `structuredContent`. A bad argument is a JSON-RPC error `-32602`. An air-broker failure is a tool result with `isError: true`. A receipt whose `status` is `fail` (including the live worker's device or number rate limit) is a successful tool result with `{ "ok": false, "req_id", "receipt" }`. The message was published; the live worker or the device rejected it.
+
+`GET /devices`, `GET /contacts`, and `POST /sms` are not routes on this worker.
 
 ## What it calls
 
 `AIR_BROKER_URL` is the origin of the live worker (for example `https://<air-broker-host>`). Every call uses only APIs that worker already implements.
 
-| This worker | Live air-broker |
+| MCP tool | Live air-broker |
 | --- | --- |
-| `GET /devices` | `POST /auth` with `{ "code" }`, then `GET /devices` with the `SESSION` cookie |
-| `GET /contacts/:device` and `GET /contacts?device=` | Same session, then `GET /contacts/:device`. If that response is not successful, `GET /contacts?device=` |
-| `POST /sms` `{ "deviceId", "to", "content" }` | WebSocket upgrade to `/ws`. Subscribe to `air780e/response/<deviceId>`, then publish `{ "action": "publish", "topic": "air780e/command/<deviceId>", "payload": { "command": "send_sms", "to", "content", "req_id" } }` and wait for the matching receipt |
+| `list_devices` | `POST /auth` with `{ "code" }`, then `GET /devices` with the `SESSION` cookie |
+| `list_contacts` | Same session, then `GET /contacts/:device`. If that response is not successful, `GET /contacts?device=` |
+| `send_sms` | WebSocket upgrade to `/ws`. Subscribe to `air780e/response/<deviceId>`, then publish `{ "action": "publish", "topic": "air780e/command/<deviceId>", "payload": { "command": "send_sms", "to", "content", "req_id" } }` and wait for the matching receipt |
 
-`POST /sms` is a route on **this** worker. The live worker has no SMS HTTP route; the send uses the WebSocket publish the browser console already uses.
+The live worker has no SMS HTTP route. The send uses the WebSocket publish the browser console already uses.
 
 There is no new air-broker authentication. Listing devices and contacts uses the browser access-code session, because those `GET`s reject anything else. The WebSocket uses that same session cookie, unless device-token credentials are configured, in which case the socket is `GET /ws?device=<id>&dtoken=<token>`.
 
 The live session is bound to the caller IP for 10 minutes. This client logs in on the same invocation as the request that uses the cookie, and retries that login once after a `401`. It does not cache the cookie and it does not ask the live worker to change that check.
-
-A receipt whose `status` is `fail` (including the live worker's device or number rate limit) is returned as `{ "ok": false, "req_id", "receipt" }` with HTTP 200. The message was published; the live worker or the device rejected it.
 
 ## Environment variables
 
