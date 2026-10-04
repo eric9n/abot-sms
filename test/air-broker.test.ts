@@ -467,7 +467,7 @@ describe("abot-sms handler", () => {
       id: 1,
       error: {
         code: -32602,
-        message: "deviceId, to (digits, optional leading +), and content are required",
+        message: "deviceId, to (a phone number), and content are required",
       },
     });
     expect(fetchImpl).not.toHaveBeenCalled();
@@ -492,30 +492,43 @@ describe("abot-sms handler", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it("strips spaces and dashes from a phone number before publishing", async () => {
-    const socket = new FakeSocket();
-    socket.onPublish = (message) => {
-      socket.emitMessage(
-        JSON.stringify({
-          action: "publish",
-          topic: "air780e/response/185",
-          payload: { status: "success", req_id: message.payload.req_id, message: "SMS sent" },
+  it("publishes a mainland mobile as 11 digits and other numbers as E.164", async () => {
+    const cases = [
+      ["13800000000", "13800000000"],
+      ["+86 138-0000-0000", "13800000000"],
+      ["(86) 138.0000.0000", "13800000000"],
+      ["008613800000000", "13800000000"],
+      ["8613800000000", "13800000000"],
+      ["10086", "10086"],
+      ["+1 (415) 555-1234", "+14155551234"],
+      ["00447911123456", "+447911123456"],
+    ] as const;
+    for (const [input, expected] of cases) {
+      const socket = new FakeSocket();
+      socket.onPublish = (message) => {
+        socket.emitMessage(
+          JSON.stringify({
+            action: "publish",
+            topic: "air780e/response/185",
+            payload: { status: "success", req_id: message.payload.req_id, message: "SMS sent" },
+          }),
+        );
+      };
+      const response = await handleRequest(
+        mcpRequest("tools/call", {
+          name: "send_sms",
+          arguments: { deviceId: "185", to: input, content: "hi" },
         }),
+        env(),
+        {
+          fetch: installFetch(() => jsonResponse({ ok: true }, 200, sessionHeaders())).fetchImpl,
+          connectWebSocket: async () => socket,
+        },
       );
-    };
-    await handleRequest(
-      mcpRequest("tools/call", {
-        name: "send_sms",
-        arguments: { deviceId: "185", to: "+86 138-0000-0000", content: "hi" },
-      }),
-      env(),
-      {
-        fetch: installFetch(() => jsonResponse({ ok: true }, 200, sessionHeaders())).fetchImpl,
-        connectWebSocket: async () => socket,
-      },
-    );
-    const published = JSON.parse(socket.sent[1] ?? "") as { payload: { to: string } };
-    expect(published.payload.to).toBe("+8613800000000");
+      expect(response.status, input).toBe(200);
+      const published = JSON.parse(socket.sent[1] ?? "") as { payload: { to: string } };
+      expect(published.payload.to, input).toBe(expected);
+    }
   });
 
   it("rejects a declared oversized body without reading it", async () => {

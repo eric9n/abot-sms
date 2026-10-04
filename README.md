@@ -14,7 +14,7 @@ Internal Cloudflare Worker that sends SMS by calling the **existing live air-bro
 | `list_contacts` | `deviceId` | `{ "contacts": [ ... ] }` |
 | `send_sms` | `deviceId`, `to`, `content` | `{ "ok", "req_id", "receipt" }` |
 
-`to` is a phone number: an optional leading `+`, then 3 to 20 digits. Spaces and dashes are removed before that check, and the normalized number is what gets published.
+`to` is normalized before it is published. A mainland China mobile (`13800138000`, `+86 138-0013-8000`, `008613800138000`, `8613800138000`) is sent as 11 digits, which is the form Air780E `sms.send` accepts on a Chinese SIM. Any other international number (`+1 (415) 555-1234`, `00447911123456`) is sent as E.164 with a leading `+`. A short code such as `10086` is sent as digits. Spaces, dashes, dots, and parentheses are removed. Letters and other characters are rejected.
 
 Tool names are unprefixed. A gateway that mounts this worker advertises `sms_list_devices`, `sms_list_contacts`, and `sms_send_sms`, and forwards `tools/call` with the original name and the same arguments. Each `inputSchema` is an object schema with those argument names, so the prefix does not have to rewrite the schema.
 

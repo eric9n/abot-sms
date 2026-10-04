@@ -20,7 +20,9 @@ const METHOD_NOT_FOUND = -32601;
 const INVALID_PARAMS = -32602;
 
 const DEVICE_ID = /^[A-Za-z0-9._:-]{1,128}$/;
-const PHONE_NUMBER = /^\+?[0-9]{3,20}$/;
+// Digits plus the punctuation people actually type. Anything else is rejected.
+const PHONE_INPUT = /^\+?[\d\s().-]{2,40}$/;
+const MAINLAND_MOBILE = /^(?:0086|86)?(1[3-9]\d{9})$/;
 const MAX_BODY_CHARS = 8_192;
 const MAX_SMS_CHARS = 1_600;
 
@@ -82,7 +84,7 @@ export const TOOLS = [
     name: "send_sms",
     title: "Send SMS",
     description:
-      "Send an SMS from a device. deviceId is the sending device, to is the destination number, and content is the message text.",
+      "Send an SMS from a device. deviceId is the sending device, to is the destination number, and content is the message text. Mainland China mobiles are normalized to 11 digits before sending. Other international numbers are normalized to E.164.",
     inputSchema: {
       type: "object",
       properties: {
@@ -90,9 +92,9 @@ export const TOOLS = [
         to: {
           type: "string",
           description:
-            "Destination phone number. Optional leading +, then 3 to 20 digits. Spaces and dashes are removed before the check.",
+            "Destination phone number. Mainland China mobiles (optional +86, 0086, or 86 prefix, spaces, dashes, dots, or parentheses) are sent as 11 digits. Other international numbers are sent as E.164, with a leading +. Short codes are sent as digits.",
           minLength: 1,
-          maxLength: 32,
+          maxLength: 40,
         },
         content: {
           type: "string",
@@ -281,12 +283,10 @@ async function callTool(
     case "send_sms": {
       rejectUnknown(args, ["deviceId", "to", "content"]);
       const deviceId = validDeviceId(args.deviceId);
-      const to = validPhoneNumber(args.to);
+      const to = normalizePhoneNumber(args.to);
       const content = validText(args.content, MAX_SMS_CHARS);
       if (!deviceId || !to || !content) {
-        throw new ParamsError(
-          "deviceId, to (digits, optional leading +), and content are required",
-        );
+        throw new ParamsError("deviceId, to (a phone number), and content are required");
       }
       return toolOk(await tools.sendSms({ deviceId, to, content }));
     }
@@ -330,10 +330,32 @@ function validDeviceId(value: unknown): string | undefined {
   return text;
 }
 
-function validPhoneNumber(value: unknown): string | undefined {
-  const text = validText(value, 32)?.replace(/[\s-]/g, "");
-  if (!text || !PHONE_NUMBER.test(text)) return undefined;
-  return text;
+// Air780E sms.send is reliable with an 11-digit national number on a Chinese SIM.
+// A leading +86 is more likely to be treated as an international SMS. Other
+// countries stay in E.164 so the module does not dial them as a local number.
+function normalizePhoneNumber(value: unknown): string | undefined {
+  const raw = validText(value, 40);
+  if (!raw || !PHONE_INPUT.test(raw)) return undefined;
+  const digits = raw.replace(/\D/g, "");
+  if (digits.length < 3 || digits.length > 20) return undefined;
+
+  // A leading + that is not +86 is already international. Do not treat
+  // +1 415... as a mainland mobile just because the digits start with 1.
+  if (raw.startsWith("+")) {
+    const mainland = /^86(1[3-9]\d{9})$/.exec(digits);
+    if (mainland?.[1]) return mainland[1];
+    return `+${digits}`;
+  }
+
+  const mainland = MAINLAND_MOBILE.exec(digits);
+  if (mainland?.[1]) return mainland[1];
+
+  if (digits.startsWith("00")) {
+    const rest = digits.slice(2);
+    if (rest.length < 3 || rest.length > 15) return undefined;
+    return `+${rest}`;
+  }
+  return digits;
 }
 
 function validText(value: unknown, max: number): string | undefined {
