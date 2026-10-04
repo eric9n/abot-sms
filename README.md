@@ -14,6 +14,8 @@ Internal Cloudflare Worker that sends SMS by calling the **existing live air-bro
 | `list_contacts` | `deviceId` | `{ "contacts": [ ... ] }` |
 | `send_sms` | `deviceId`, `to`, `content` | `{ "ok", "req_id", "receipt" }` |
 
+`to` is normalized before it is published. A mainland China mobile (`13800138000`, `+86 138-0013-8000`, `008613800138000`, `8613800138000`) is sent as 11 digits, which is the form Air780E `sms.send` accepts on a Chinese SIM. Any other international number (`+1 (415) 555-1234`, `00447911123456`) is sent as E.164 with a leading `+`. A short code such as `10086` is sent as digits. Spaces, dashes, dots, and parentheses are removed. Letters and other characters are rejected.
+
 Tool names are unprefixed. A gateway that mounts this worker advertises `sms_list_devices`, `sms_list_contacts`, and `sms_send_sms`, and forwards `tools/call` with the original name and the same arguments. Each `inputSchema` is an object schema with those argument names, so the prefix does not have to rewrite the schema.
 
 `tools/call` returns the payload as text content and as `structuredContent`. A bad argument is a JSON-RPC error `-32602`. An air-broker failure is a tool result with `isError: true`. A receipt whose `status` is `fail` (including the live worker's device or number rate limit) is a successful tool result with `{ "ok": false, "req_id", "receipt" }`. The message was published; the live worker or the device rejected it.

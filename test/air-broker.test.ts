@@ -465,7 +465,10 @@ describe("abot-sms handler", () => {
     expect(await response.json()).toMatchObject({
       jsonrpc: "2.0",
       id: 1,
-      error: { code: -32602, message: "deviceId, to, and content are required" },
+      error: {
+        code: -32602,
+        message: "deviceId, to (a phone number), and content are required",
+      },
     });
     expect(fetchImpl).not.toHaveBeenCalled();
   });
@@ -481,9 +484,51 @@ describe("abot-sms handler", () => {
         env(),
         { fetch: fetchImpl },
       );
-      expect(await response.json()).toMatchObject({ error: { code: -32602 } });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        error: { code: -32602 },
+      });
     }
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("publishes a mainland mobile as 11 digits and other numbers as E.164", async () => {
+    const cases = [
+      ["13800000000", "13800000000"],
+      ["+86 138-0000-0000", "13800000000"],
+      ["(86) 138.0000.0000", "13800000000"],
+      ["008613800000000", "13800000000"],
+      ["8613800000000", "13800000000"],
+      ["10086", "10086"],
+      ["+1 (415) 555-1234", "+14155551234"],
+      ["00447911123456", "+447911123456"],
+    ] as const;
+    for (const [input, expected] of cases) {
+      const socket = new FakeSocket();
+      socket.onPublish = (message) => {
+        socket.emitMessage(
+          JSON.stringify({
+            action: "publish",
+            topic: "air780e/response/185",
+            payload: { status: "success", req_id: message.payload.req_id, message: "SMS sent" },
+          }),
+        );
+      };
+      const response = await handleRequest(
+        mcpRequest("tools/call", {
+          name: "send_sms",
+          arguments: { deviceId: "185", to: input, content: "hi" },
+        }),
+        env(),
+        {
+          fetch: installFetch(() => jsonResponse({ ok: true }, 200, sessionHeaders())).fetchImpl,
+          connectWebSocket: async () => socket,
+        },
+      );
+      expect(response.status, input).toBe(200);
+      const published = JSON.parse(socket.sent[1] ?? "") as { payload: { to: string } };
+      expect(published.payload.to, input).toBe(expected);
+    }
   });
 
   it("rejects a declared oversized body without reading it", async () => {
