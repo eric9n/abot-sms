@@ -5,9 +5,9 @@ import {
 } from "./air-broker.js";
 
 const DEVICE_ID = /^[A-Za-z0-9._:-]{1,128}$/;
+const PHONE_NUMBER = /^\+?[0-9]{3,20}$/;
 const MAX_BODY_CHARS = 8_192;
 const MAX_SMS_CHARS = 1_600;
-const MAX_NUMBER_CHARS = 32;
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -84,10 +84,10 @@ async function sendSms(
   const body = await readJson(request);
   if (body instanceof Response) return body;
   const deviceId = validDeviceId(body.deviceId);
-  const to = validText(body.to, MAX_NUMBER_CHARS);
+  const to = validPhoneNumber(body.to);
   const content = validText(body.content, MAX_SMS_CHARS);
   if (!deviceId || !to || !content) {
-    return errorJson(400, "deviceId, to, and content are required");
+    return errorJson(400, "deviceId, to (digits, optional leading +), and content are required");
   }
 
   const result = await createAirBroker(configFromEnv(env), deps).sendSms({
@@ -123,6 +123,8 @@ function jsonList(body: unknown, event: string): Response {
 }
 
 async function readJson(request: Request): Promise<Record<string, unknown> | Response> {
+  const declared = Number(request.headers.get("content-length") ?? "0");
+  if (declared > MAX_BODY_CHARS * 4) return errorJson(413, "body too large");
   const text = await request.text();
   if (text.length > MAX_BODY_CHARS) return errorJson(413, "body too large");
   try {
@@ -149,6 +151,12 @@ function deviceFromPath(pathname: string): string | undefined {
 function validDeviceId(value: unknown): string | undefined {
   const text = validText(value, 128);
   if (!text || !DEVICE_ID.test(text)) return undefined;
+  return text;
+}
+
+function validPhoneNumber(value: unknown): string | undefined {
+  const text = validText(value, 32)?.replace(/[\s-]/g, "");
+  if (!text || !PHONE_NUMBER.test(text)) return undefined;
   return text;
 }
 

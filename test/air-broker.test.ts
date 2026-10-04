@@ -352,6 +352,37 @@ describe("abot-sms handler", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it("rejects a recipient that is not a phone number", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    for (const to of ["abc", "12", "+86 138-0000-0000x", "#123"]) {
+      const response = await handleRequest(
+        new Request(`${BASE}/sms`, {
+          method: "POST",
+          body: JSON.stringify({ deviceId: "185", to, content: "hi" }),
+        }),
+        env(),
+        { fetch: fetchImpl },
+      );
+      expect(response.status).toBe(400);
+    }
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("rejects a declared oversized body without reading it", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    const response = await handleRequest(
+      new Request(`${BASE}/sms`, {
+        method: "POST",
+        headers: { "content-length": String(10 * 1024 * 1024) },
+        body: "{}",
+      }),
+      env(),
+      { fetch: fetchImpl },
+    );
+    expect(response.status).toBe(413);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("submits SMS over the WebSocket protocol", async () => {
     const socket = new FakeSocket();
     socket.onPublish = (message) => {

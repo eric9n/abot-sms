@@ -130,10 +130,12 @@ export async function connectBrokerWebSocket(
     redirect: "manual",
   });
   if (response.status === 401) {
+    await discardBody(response);
     throw new AirBrokerError("air-broker rejected the WebSocket", 401, "auth");
   }
   const socket = response.webSocket;
   if (!socket) {
+    await discardBody(response);
     throw new AirBrokerError(
       "air-broker did not accept the WebSocket upgrade",
       response.status || 502,
@@ -210,9 +212,11 @@ async function authedJson(
   assertAllowedPath(path);
   let response = await sessionGet(fetchImpl, base, accessCode, pathAndQuery);
   if (response.status === 401) {
+    await discardBody(response);
     response = await sessionGet(fetchImpl, base, accessCode, pathAndQuery);
   }
   if (!response.ok) {
+    await discardBody(response);
     throw new AirBrokerError(
       `air-broker ${path} returned ${response.status}`,
       response.status,
@@ -255,6 +259,7 @@ async function login(
     body: JSON.stringify({ code: accessCode.trim() }),
     redirect: "manual",
   });
+  await discardBody(response);
   if (response.status >= 300 && response.status < 400) {
     throw new AirBrokerError("air-broker auth redirected", 502, "auth");
   }
@@ -403,6 +408,15 @@ function parseReceipt(
 function assertAllowedPath(path: string): void {
   if (!ALLOWED_PATHS.has(path) && !path.startsWith("/contacts/")) {
     throw new AirBrokerError(`refusing unexpected path ${path}`, 500, "client");
+  }
+}
+
+// Unread bodies keep the upstream connection open until the invocation ends.
+async function discardBody(response: Response): Promise<void> {
+  try {
+    await response.body?.cancel();
+  } catch {
+    // Already consumed or errored; nothing left to release.
   }
 }
 
