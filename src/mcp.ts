@@ -20,9 +20,9 @@ const METHOD_NOT_FOUND = -32601;
 const INVALID_PARAMS = -32602;
 
 const DEVICE_ID = /^[A-Za-z0-9._:-]{1,128}$/;
+const PHONE_NUMBER = /^\+?[0-9]{3,20}$/;
 const MAX_BODY_CHARS = 8_192;
 const MAX_SMS_CHARS = 1_600;
-const MAX_NUMBER_CHARS = 32;
 
 const deviceIdSchema = {
   type: "string",
@@ -89,9 +89,10 @@ export const TOOLS = [
         deviceId: deviceIdSchema,
         to: {
           type: "string",
-          description: "Destination phone number.",
+          description:
+            "Destination phone number. Optional leading +, then 3 to 20 digits. Spaces and dashes are removed before the check.",
           minLength: 1,
-          maxLength: MAX_NUMBER_CHARS,
+          maxLength: 32,
         },
         content: {
           type: "string",
@@ -148,6 +149,10 @@ export async function handleMcp(
   request: Request,
   tools: SmsTools,
 ): Promise<Response> {
+  const declared = Number(request.headers.get("content-length") ?? "0");
+  if (declared > MAX_BODY_CHARS * 4) {
+    return rpcError(null, INVALID_REQUEST, "body too large", 413);
+  }
   const text = await request.text();
   if (text.length > MAX_BODY_CHARS) {
     return rpcError(null, INVALID_REQUEST, "body too large", 413);
@@ -276,10 +281,12 @@ async function callTool(
     case "send_sms": {
       rejectUnknown(args, ["deviceId", "to", "content"]);
       const deviceId = validDeviceId(args.deviceId);
-      const to = validText(args.to, MAX_NUMBER_CHARS);
+      const to = validPhoneNumber(args.to);
       const content = validText(args.content, MAX_SMS_CHARS);
       if (!deviceId || !to || !content) {
-        throw new ParamsError("deviceId, to, and content are required");
+        throw new ParamsError(
+          "deviceId, to (digits, optional leading +), and content are required",
+        );
       }
       return toolOk(await tools.sendSms({ deviceId, to, content }));
     }
@@ -320,6 +327,12 @@ function rejectUnknown(args: Record<string, unknown>, allowed: string[]): void {
 function validDeviceId(value: unknown): string | undefined {
   const text = validText(value, 128);
   if (!text || !DEVICE_ID.test(text)) return undefined;
+  return text;
+}
+
+function validPhoneNumber(value: unknown): string | undefined {
+  const text = validText(value, 32)?.replace(/[\s-]/g, "");
+  if (!text || !PHONE_NUMBER.test(text)) return undefined;
   return text;
 }
 

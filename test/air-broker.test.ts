@@ -465,8 +465,71 @@ describe("abot-sms handler", () => {
     expect(await response.json()).toMatchObject({
       jsonrpc: "2.0",
       id: 1,
-      error: { code: -32602, message: "deviceId, to, and content are required" },
+      error: {
+        code: -32602,
+        message: "deviceId, to (digits, optional leading +), and content are required",
+      },
     });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("rejects a recipient that is not a phone number", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    for (const to of ["abc", "12", "+86 138-0000-0000x", "#123"]) {
+      const response = await handleRequest(
+        mcpRequest("tools/call", {
+          name: "send_sms",
+          arguments: { deviceId: "185", to, content: "hi" },
+        }),
+        env(),
+        { fetch: fetchImpl },
+      );
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        error: { code: -32602 },
+      });
+    }
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("strips spaces and dashes from a phone number before publishing", async () => {
+    const socket = new FakeSocket();
+    socket.onPublish = (message) => {
+      socket.emitMessage(
+        JSON.stringify({
+          action: "publish",
+          topic: "air780e/response/185",
+          payload: { status: "success", req_id: message.payload.req_id, message: "SMS sent" },
+        }),
+      );
+    };
+    await handleRequest(
+      mcpRequest("tools/call", {
+        name: "send_sms",
+        arguments: { deviceId: "185", to: "+86 138-0000-0000", content: "hi" },
+      }),
+      env(),
+      {
+        fetch: installFetch(() => jsonResponse({ ok: true }, 200, sessionHeaders())).fetchImpl,
+        connectWebSocket: async () => socket,
+      },
+    );
+    const published = JSON.parse(socket.sent[1] ?? "") as { payload: { to: string } };
+    expect(published.payload.to).toBe("+8613800000000");
+  });
+
+  it("rejects a declared oversized body without reading it", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    const response = await handleRequest(
+      new Request(`${BASE}/mcp`, {
+        method: "POST",
+        headers: { "content-length": String(10 * 1024 * 1024) },
+        body: "{}",
+      }),
+      env(),
+      { fetch: fetchImpl },
+    );
+    expect(response.status).toBe(413);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
