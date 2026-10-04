@@ -9,6 +9,7 @@ import { handleRequest } from "../src/index.js";
 
 const BASE = "https://broker.example";
 const ACCESS_CODE = "secret-code";
+const OWNER = "agent@abot.run";
 const SESSION = "payload.sig%2Bencoded";
 
 function env(overrides: Partial<Env> = {}): Env {
@@ -328,6 +329,7 @@ function mcpRequest(
     headers: {
       "content-type": "application/json",
       accept: "application/json, text/event-stream",
+      "x-abot-owner-email": OWNER,
     },
     body: JSON.stringify(body),
   });
@@ -341,6 +343,18 @@ describe("abot-sms handler", () => {
     });
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true, service: "abot-sms" });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("rejects /mcp calls that did not come through the gateway", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    for (const owner of [undefined, "  "]) {
+      const request = mcpRequest("tools/list");
+      if (owner === undefined) request.headers.delete("x-abot-owner-email");
+      else request.headers.set("x-abot-owner-email", owner);
+      const response = await handleRequest(request, env(), { fetch: fetchImpl });
+      expect(response.status).toBe(401);
+    }
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
@@ -536,7 +550,10 @@ describe("abot-sms handler", () => {
     const response = await handleRequest(
       new Request(`${BASE}/mcp`, {
         method: "POST",
-        headers: { "content-length": String(10 * 1024 * 1024) },
+        headers: {
+          "content-length": String(10 * 1024 * 1024),
+          "x-abot-owner-email": OWNER,
+        },
         body: "{}",
       }),
       env(),
