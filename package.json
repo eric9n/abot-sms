@@ -4,8 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
-    "dry-run": "wrangler deploy --dry-run",
+    "build": "node deploy/cloudflare.mjs build",
+    "deploy": "node deploy/cloudflare.mjs deploy",
     "cf-typegen": "wrangler types",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"

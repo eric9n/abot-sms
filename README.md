@@ -33,12 +33,32 @@ Set these with `wrangler secret put` or a local `.dev.vars` file. Do not commit 
 
 `AIR_BROKER_URL` and `AIR_BROKER_ACCESS_CODE` are declared in `secrets.required`. The device pair is optional and is not required at deploy time.
 
+## Network exposure
+
+The routes have no caller authentication. `wrangler.jsonc` sets `workers_dev: false` and `preview_urls: false`, so the only way in is the `BACKEND_SMS` service binding on `abot-gateway`. `deploy/cloudflare.mjs` refuses to deploy a config that turns either back on, or that adds routes.
+
+## Deployment
+
+The only deploy path is Cloudflare Workers Builds, connected to this Origin repository (`dagow/abot-sms`). A push to `main` builds and deploys. Other branches and preview builds do not deploy.
+
+| Dashboard setting (Workers & Pages > abot-sms > Settings > Builds) | Value |
+| --- | --- |
+| Git repository / branch | `dagow/abot-sms` / `main` |
+| Build command | `node deploy/cloudflare.mjs build` |
+| Deploy command | `node deploy/cloudflare.mjs deploy` |
+| Root directory | `/` |
+| Preview builds | off |
+
+`build` checks `wrangler.jsonc`, then runs the type check, the tests, and `wrangler deploy --dry-run`. `deploy` exits with an error unless `WORKERS_CI=1` and `WORKERS_CI_BRANCH=main` (both set by Workers Builds), and tags the Worker version with the commit SHA. `npm run deploy` runs the same guarded script, so it fails on a laptop.
+
+Secrets are set once on the Worker (dashboard or `wrangler secret put`) and are not touched by the build.
+
 ## Local checks
 
 ```bash
 npm install
-npm test
-npm run typecheck
+npm run build   # same checks the Workers Builds build step runs
+npm run dev
 ```
 
-`npm run dev` and `npm run deploy` talk to Cloudflare and, once secrets are set, to the live air-broker worker. They do not deploy or edit that worker.
+`npm run dev` talks to the live air-broker worker once `.dev.vars` is set. Nothing here deploys or edits that worker.

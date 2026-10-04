@@ -4,6 +4,10 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-10-03",
   "compatibility_flags": ["nodejs_compat"],
+  // The routes have no caller authentication. The only entry point is the
+  // abot-gateway service binding (BACKEND_SMS); never expose a public URL.
+  "workers_dev": false,
+  "preview_urls": false,
   "observability": {
     "enabled": true,
     "logs": {
