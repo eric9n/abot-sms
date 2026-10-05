@@ -53,7 +53,7 @@ Set these with `wrangler secret put` or a local `.dev.vars` file. Do not commit 
 
 ## Network exposure
 
-The routes have no caller authentication. `wrangler.jsonc` sets `workers_dev: false` and `preview_urls: false`, so the only way in is the `BACKEND_SMS` service binding on `abot-gateway`. `deploy/cloudflare.mjs` refuses to deploy a config that turns either back on, or that adds routes.
+The routes have no caller authentication. `POST /mcp` returns 401 unless the request carries a non-empty `X-Abot-Owner-Email` header, which `abot-gateway` sets on every binding call. `wrangler.jsonc` sets `workers_dev: false` and `preview_urls: false`, so the only way in is the `BACKEND_SMS` service binding on `abot-gateway`. `deploy/cloudflare.mjs` refuses to deploy a config that turns either back on, or that adds routes.
 
 ## Deployment
 

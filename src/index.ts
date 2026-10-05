@@ -31,6 +31,13 @@ export async function handleRequest(
         { status: 405, headers: { allow: "POST" } },
       );
     }
+    // The gateway always sets this on binding calls; anything without it did not come through the gateway.
+    if (!request.headers.get("X-Abot-Owner-Email")?.trim()) {
+      return Response.json(
+        { ok: false, error: "X-Abot-Owner-Email required" },
+        { status: 401 },
+      );
+    }
     return handleMcp(request, toolsFor(env, deps));
   }
 
